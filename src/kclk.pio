@@ -1,0 +1,44 @@
+; Amiga 2000 keyboard interface - KCLK machine
+; KDAT is active low (logic 1 is 0v, logic 0 is 5v)
+; KCLK is high for 40us, low for 20us.  Held low for ctrl-amiga-amiga Reset ( for 500ms)
+; init sequence clocks out a logic 1 (driven low) on KDAT and waits for ack then sends $FE, $FD
+; data bits are clocked out on KBDAT (change while KCLK is high)
+; ack bit is received (driven low) from computer after every byte sent (within 143ms for a period of 1-85us)
+; KDAT is pulled high when not sending or waiting for ack
+; if ack is not received within expected time, loss of sync occurs (similar to init sequence, but sends $F9 after ack)
+
+; This is just the clock for now
+; clock div should be set such that 8 cycles is 20us (2.5us / cycle, 400kHz)
+
+.program kclk
+
+    set pins 1 [8]  ; high for 16 cycles / 40us total
+    irq clear 0 [7] ; clear irq then wait another 7 cycles / 20us total to sync KDAT which waits for it to clear before changing
+    set pins 0 [8]  ; low for 8 cycles / 20us
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void kclk_program_init(PIO pio, uint sm, uint offset, uint pin){
+    pio_sm_config c = kclk_program_get_default_config(offset);
+
+    // set the out pins group to just one pin as provided
+    sm_config_set_out_pins(&c, pin, 1); 
+
+    // connect pin to selected PIO
+    pio_gpio_init(pio, pin);
+
+    // pin is KCLK which is always output
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    // set clkdiv for approx 400kHz
+    float div = clock_get_hz(clk_sys) / 400000;
+    sm_config_set_clkdiv(&c, div);
+
+    // load our config into the selected state machine
+    pio_sm_init(pio, sm, offset, &c);
+
+    // start the state machine
+    pio_sm_set_enabled(pio, sm, true);    
+}
+%}
