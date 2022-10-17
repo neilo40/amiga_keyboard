@@ -18,7 +18,6 @@ project(${PROJECT} C CXX ASM)
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
-
 add_executable(${PROJECT} src/main.c )
 
 pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/src/kclk.pio)
@@ -27,13 +26,13 @@ pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/src/kdat.pio)
 pico_set_program_name(${PROJECT} ${PROJECT})
 pico_set_program_version(${PROJECT} "0.1")
 
+# enable logging over uart, diable over usb
 pico_enable_stdio_uart(${PROJECT} 1)
 pico_enable_stdio_usb(${PROJECT} 0)
 
 target_include_directories(${PROJECT} BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR} include)
 
-# Add the standard library to the build
+# Add the standard library, tiny usb, pio etc to the build
 target_link_libraries(${PROJECT} PUBLIC pico_stdlib hardware_pio tinyusb_host tinyusb_board)
 
 pico_add_extra_outputs(${PROJECT})
-

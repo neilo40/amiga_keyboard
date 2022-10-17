@@ -10,6 +10,7 @@
 extern void hid_task(void);
 static inline void process_keyboard_report(hid_keyboard_report_t const *p_report);
 
+const uint LED_PIN = 25;
 const uint KDAT_PIN = 16;
 const uint KCLK_PIN = 14;
 const uint KCLK_PIO_PIN = 10;
@@ -89,8 +90,7 @@ uint kclk_sm;
 uint kdat_sm;
 PIO pio;
 
-int main()
-{
+int main(){
     // PIO test
     pio = pio0;
     uint kclk_offset = pio_add_program(pio, &kclk_program);
@@ -100,22 +100,29 @@ int main()
     uint kdat_offset = pio_add_program(pio, &kdat_program);
     kdat_sm = pio_claim_unused_sm(pio, true);
     kdat_program_init(pio, kdat_sm, kdat_offset, KDAT_PIO_PIN);
+    
 
     gpio_init(KDAT_PIN);
     gpio_init(KCLK_PIN);
+    gpio_init(LED_PIN);
 
     gpio_set_dir(KDAT_PIN, GPIO_OUT);
     gpio_set_dir(KCLK_PIN, GPIO_OUT);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
 
     gpio_put(KDAT_PIN, true);
     gpio_put(KCLK_PIN, true);
 
     board_init();
     tusb_init();
-    init_sequence();  // loop here until computer responds to the init sequence
+    //init_sequence();  // loop here until computer responds to the init sequence
 
     while(1) {
-        tuh_task();
+        // tuh_task();
+        busy_wait_us(50000);
+        gpio_put(LED_PIN, true);
+        busy_wait_us(50000);
+        gpio_put(LED_PIN, false);
     }
 }
 

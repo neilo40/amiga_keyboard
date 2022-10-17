@@ -12,9 +12,9 @@
 
 .program kclk
 
-    set pins 1 [8]  ; high for 16 cycles / 40us total
-    irq clear 0 [7] ; clear irq then wait another 7 cycles / 20us total to sync KDAT which waits for it to clear before changing
-    set pins 0 [8]  ; low for 8 cycles / 20us
+    set pins 1 [7]  ; high for 16 cycles / 40us total, 8 here and 8 on next line
+    irq clear 4 [7] ; clear irq then wait another 7 cycles / 20us total to sync KDAT which waits for it to clear before changing
+    set pins 0 [7]  ; low for 8 cycles / 20us
 
 % c-sdk {
 #include "hardware/clocks.h"
@@ -23,7 +23,7 @@ static inline void kclk_program_init(PIO pio, uint sm, uint offset, uint pin){
     pio_sm_config c = kclk_program_get_default_config(offset);
 
     // set the out pins group to just one pin as provided
-    sm_config_set_out_pins(&c, pin, 1); 
+    sm_config_set_set_pins(&c, pin, 1); 
 
     // connect pin to selected PIO
     pio_gpio_init(pio, pin);

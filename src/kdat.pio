@@ -6,18 +6,22 @@
 
 .program kdat
 
-    mov Y OSR       ; OSR is preloaded with timeout value.  store it in Y
+    pull                ; pull the preloaded timeout from FIFO to OSR
+    mov Y OSR           ; store it in Y
 init:
-    mov X Y         ; copy timeout value from Y to X
-    irq wait 0      ; set IRQ 0 and wait for the KCLK SM to clear it
-    set pins 0 [8]  ; force KDAT low for 20us (TODO: need to set pindir to output first?)
-    set pindirs 0   ; make KDAT an input to wait for ack
+    mov X Y             ; copy timeout value from Y to X
+    irq wait 4          ; set IRQ 4 and wait for the KCLK SM to clear it
+    set pindirs 1       ; make KDAT an output
+    set pins 0 [15]     ; force KDAT low for 40us
+    set pindirs 0       ; make KDAT an input to wait for ack
 ack_loop:
-    jmp pin done    ; if ack received, done
-    jmp X-- ack_loop; if timeout not exceeded, check pin again for ack
-    jmp init        ; if we got here, timeout was exceeded with no ack, start again
+    jmp pin continue    ; if no ack yet (low), jump over the jump to done (jmp pins happens when pin high)
+    jmp done            ; received ack, skip to done
+continue:
+    jmp X-- ack_loop    ; if timeout not exceeded, check pin again for ack
+    jmp init            ; if we got here, timeout was exceeded with no ack, start init again
 done:
-    jmp done        ; infinite loop for now.  TODO: regular data shifting
+    jmp done            ; infinite loop for now.  TODO: regular data shifting
 
 % c-sdk {
 #include "hardware/clocks.h"
@@ -26,7 +30,7 @@ static inline void kdat_program_init(PIO pio, uint sm, uint offset, uint pin){
     pio_sm_config c = kdat_program_get_default_config(offset);
 
     // set the out pins group to just one pin as provided
-    sm_config_set_out_pins(&c, pin, 1); 
+    sm_config_set_set_pins(&c, pin, 1); 
 
     // connect pin to selected PIO
     pio_gpio_init(pio, pin);
@@ -34,23 +38,23 @@ static inline void kdat_program_init(PIO pio, uint sm, uint offset, uint pin){
     // pin is KDAT which begins as output
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
 
+    // enable pullup for when KDAT is made an input
+    gpio_pull_up(pin);
+
     // set pin high to begin with
     pio_sm_set_pins(pio, pin, 1);
     
     // set clkdiv for approx 400kHz
     float div = clock_get_hz(clk_sys) / 400000;
     sm_config_set_clkdiv(&c, div);
-
-    // set up autopull so that OSR is automatically loaded from Tx FIFO
-    sm_config_set_out_shift(&c, true, true, 0); // TODO: what should the last value be here (pull_threshold)
     
-    // load Tx FIFO with 100000 (timeout value for 500ms at 400kHz clk with 2 instructions per loop)
-    pio_sm_put(pio, sm, 100000);
-
     // load our config into the selected state machine
     pio_sm_init(pio, sm, offset, &c);
 
     // start the state machine
     pio_sm_set_enabled(pio, sm, true);    
+
+    // load Tx FIFO with 100000 (timeout value for 500ms at 400kHz clk with 2 instructions per loop)
+    pio_sm_put(pio, sm, 100000);
 }
 %}
