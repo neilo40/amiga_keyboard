@@ -10,54 +10,26 @@
 extern void hid_task(void);
 static inline void process_keyboard_report(hid_keyboard_report_t const *p_report);
 
-const uint KDAT_PIN = 16;
-const uint KCLK_PIN = 14;
+const uint LED_PIN = 25;
 const uint KCLK_PIO_PIN = 10;
 const uint KDAT_PIO_PIN = 11;
 const uint AMIGA_KCLK_PIO_PIN = 12;
 const uint AMIGA_KDAT_PIO_PIN = 13;
 
-void send_byte(unsigned char b) {
-    gpio_set_dir(KDAT_PIN, GPIO_OUT);
-    busy_wait_us(100);
-
-    int positions[]= {6, 5, 4, 3, 2, 1, 0, 7};  // the order in which the bits are clocked out
-    for (int i=0; i<8; i++){
-      int this_bit = (b >> positions[i]) & 1;
-      gpio_put(KDAT_PIN, !this_bit);
-      busy_wait_us(20);
-      gpio_put(KCLK_PIN, false);
-      busy_wait_us(20);
-      gpio_put(KCLK_PIN, true);
-      busy_wait_us(10);
-      if (i == 7){
-        gpio_set_dir(KDAT_PIN, GPIO_IN);
-      }
-      busy_wait_us(40);
-    }
-}
-
 uint keyboard_sm;
 uint amiga_sm;
-uint state;  // 0 = before sync, 1 = sync phase 1, 2 = regular data ack 
 
-// ISR for IRQ 0 - ack received
-void ack_received(){
-    switch (state) {
-    case 0: 
-        pio_sm_put(pio0, keyboard_sm, 0xFD);  // TODO: this needs to be rotated
-        state = 1;
-    case 1: 
-        pio_sm_put(pio0, keyboard_sm, 0xFD); // TODO: this needs to be rotated
-        state = 2;
-    case 2:
-        pio_sm_put(pio0, keyboard_sm, 0xFD); // TODO: where to store queue of data bytes to send?
-    }
+void ack_received() {
+    gpio_put(LED_PIN, true);
+}
+
+unsigned char rotate(unsigned char code) {
+    // bits needs to be clocked out 6,5,4,3,2,1,0,7
+    unsigned char bit7 = (code >> 7) & 0x01;
+    return (code << 1) | bit7;
 }
 
 int main(){
-    state = 0;
-
     // IRQ 7 is PIO IRQ 0
     irq_set_exclusive_handler(7, ack_received);
 
@@ -69,6 +41,14 @@ int main(){
     uint amiga_offset = pio_add_program(pio1, &amiga_program);
     amiga_sm = pio_claim_unused_sm(pio1, true);
     amiga_program_init(pio1, amiga_sm, amiga_offset, AMIGA_KCLK_PIO_PIN);
+
+    // first bytes to be clocked out after init: TODO: handle loss of sync
+    pio_sm_put(pio0, keyboard_sm, rotate(0xFD));  
+    pio_sm_put(pio0, keyboard_sm, rotate(0xFE)); 
+
+    // set up LED
+    gpio_set_dir(LED_PIN, true);
+    gpio_put(LED_PIN, false); // LED is off to start with
 
     board_init();
     tusb_init();
@@ -98,21 +78,26 @@ unsigned char apply_updown(unsigned char code, int updown){
     return code;
 }
 
-void check_for_reset(hid_keyboard_report_t const *report) {
+bool check_for_reset(hid_keyboard_report_t const *report) {
     if (report->modifier & (KEYBOARD_MODIFIER_LEFTCTRL & KEYBOARD_MODIFIER_LEFTGUI & KEYBOARD_MODIFIER_RIGHTGUI)) {
         // ctrl-amiga-amiga pressed (ctrl, left-win, right-win)
         // TODO: check if A500 or A2000 and reset accordingly
         // A500: hold reset pin low for 500us and run init_sequence
         // A2000: hold KCLK low for 500ms and run init_sequence
-
-        // Using PIO
         pio_sm_set_enabled(pio0, keyboard_sm, false); // disable keyboard SM
         pio_sm_set_pins(pio0, keyboard_sm, 2); // force KCLK low, keep KDAT high
         busy_wait_us(500000); // wait 500ms
-        state = 0;
+        gpio_put(LED_PIN, false);
+
+        pio_sm_clear_fifos(pio0, keyboard_sm);
+        pio_sm_put(pio0, keyboard_sm, 28500); // timeout, will be popped first when SM starts
+        pio_sm_put(pio0, keyboard_sm, rotate(0xFD));  
+        pio_sm_put(pio0, keyboard_sm, rotate(0xFE)); 
         pio_sm_set_enabled(pio0, keyboard_sm, true); // re-enable SM
         pio_sm_restart(pio0, keyboard_sm); // restart state machine
+        return true;
     }
+    return false;
 }
 
 static inline bool find_key_in_report(hid_keyboard_report_t const *report, uint8_t keycode){
@@ -177,9 +162,7 @@ void send_key_presses(hid_keyboard_report_t const *report){
 				}
 			}
 			if (found == 0){
-				send_byte(apply_updown(keys_down_now[k], 1));
-				//sprintf(message, "Down: %#02x", keys_down_now[k]);
-				//debug_log(message);
+				pio_sm_put_blocking(pio0, keyboard_sm, rotate(apply_updown(keys_down_now[k], 1)));
 			}
 		}
 	}
@@ -195,9 +178,7 @@ void send_key_presses(hid_keyboard_report_t const *report){
 				}
 			}
 			if (found == 0){
-				send_byte(apply_updown(keys_down_before[m], 0));
-				//sprintf(message, "Up: %#02x", keys_down_before[m]);
-				//debug_log(message);
+				pio_sm_put_blocking(pio0, keyboard_sm, rotate(apply_updown(keys_down_before[m], 0)));
 			}
 		}
 	}
@@ -207,7 +188,9 @@ void send_key_presses(hid_keyboard_report_t const *report){
 
 static inline void process_keyboard_report(hid_keyboard_report_t const *report) {
     // key was pressed.  do stuff
-    check_for_reset(report);
+    if (check_for_reset(report)) {
+        return;
+    }
     send_key_presses(report);
 }
 

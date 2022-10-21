@@ -10,22 +10,26 @@
     pull                ; pull the preloaded timeout from FIFO to OSR
     mov Y OSR           ; store it in Y
 init:
-    mov X Y             ; copy timeout value from Y to X
     set pindirs 3       ; make KDAT and KCLK an output
     set pins 1 [7]      ; force KCLK high, KDAT low (2'b01), wait 20us
     set pins 0 [7]      ; KCLK low, wait 20us
     set pins 1 [7]      ; KCLK high, wait 20us
     set pins 3          ; KCLK high, KDAT high
     set pindirs 1       ; make KDAT an input to wait for ack
+wait_ack:
+    mov X Y             ; copy timeout value from Y to X
 ack_loop:
     jmp pin continue    ; if no ack yet (low), jump over the jump to done (jmp pins happens when pin high)
-    jmp done            ; received ack, skip to done
+    jmp ack             ; received ack, skip to out loop
 continue:
     jmp X-- ack_loop    ; if timeout not exceeded, check pin again for ack
     jmp init            ; if we got here, timeout was exceeded with no ack, start init again
-done:
-    irq set 0           ; set IRQ0 to tell the main program that we are synced
-    jmp done            ; infinite loop for now.  TODO: regular data shifting
+ack:
+    irq set 0           ; set IRQ0 to tell the main program that we got an ack
+out_loop:
+    pull                ; load the next data from Tx FIFO to OSR, blocking if empty
+    out pins 8          ; shift 8 bits out.  TODO: how to handle clock?  This needs to be a loop
+    jmp wait_ack        
 
 % c-sdk {
 #include "hardware/clocks.h"
