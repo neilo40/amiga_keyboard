@@ -1,0 +1,46 @@
+; a completely independent SM for testing only
+; simulates the amiga end of the connection
+; KCLK will be mapped to jump pin only, return ack on KDAT after every 8 clock pulses
+
+.program amiga
+    set X 8             ; set loop counter to count 8 clocks
+wait_pulse:
+    wait 0 pin 0        ; wait for 0 on KCLK (pin 0 of our mapping)
+    wait 1 pin 0        ; wait for 1 on KCLK
+    jmp X-- wait_pulse  ; loop until seen 8 pulses
+    nop [31]            ; wait a few cycles
+    set pindirs 1       ; set KDAT to output
+    set pins 0 [7]      ; drive KDAT low for 20 us
+    set pindirs 0       ; set KDAT to input
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void amiga_program_init(PIO pio, uint sm, uint offset, uint base_pin){
+    // base_pin is KCLK, base_pin+1 is KDAT
+    pio_sm_config c = amiga_program_get_default_config(offset);
+
+    // set the out pins group to two pins
+    sm_config_set_set_pins(&c, base_pin, 2); 
+
+    // connect pins to selected PIO
+    pio_gpio_init(pio, base_pin);
+    pio_gpio_init(pio, base_pin+1);
+
+    // pins begin as input
+    pio_sm_set_consecutive_pindirs(pio, sm, base_pin, 2, true);
+
+    // enable pullup for when KDAT is made an input
+    gpio_pull_up(base_pin+1);
+
+    // set clkdiv for approx 400kHz
+    float div = clock_get_hz(clk_sys) / 400000;
+    sm_config_set_clkdiv(&c, div);
+    
+    // load our config into the selected state machine
+    pio_sm_init(pio, sm, offset, &c);
+
+    // start the state machine
+    pio_sm_set_enabled(pio, sm, true);    
+}
+%}

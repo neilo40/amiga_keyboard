@@ -1,0 +1,69 @@
+; Amiga 2000 keyboard interface - KDAT/KCLK machine
+; This only does the init sequence for now
+; OSR is set at startup to timeout counter (143ms = 57k cycles = 28k5 loops of 2 instructions)
+; program does a one-time store of this timeout from OSR to Y
+; X is counted down to 0 and refreshed by Y if needed
+; this combines kdat and kclk into one SM
+
+.program keyboard
+
+    pull                ; pull the preloaded timeout from FIFO to OSR
+    mov Y OSR           ; store it in Y
+init:
+    mov X Y             ; copy timeout value from Y to X
+    set pindirs 3       ; make KDAT and KCLK an output
+    set pins 1 [7]      ; force KCLK high, KDAT low (2'b01), wait 20us
+    set pins 0 [7]      ; KCLK low, wait 20us
+    set pins 1 [7]      ; KCLK high, wait 20us
+    set pins 3          ; KCLK high, KDAT high
+    set pindirs 1       ; make KDAT an input to wait for ack
+ack_loop:
+    jmp pin continue    ; if no ack yet (low), jump over the jump to done (jmp pins happens when pin high)
+    jmp done            ; received ack, skip to done
+continue:
+    jmp X-- ack_loop    ; if timeout not exceeded, check pin again for ack
+    jmp init            ; if we got here, timeout was exceeded with no ack, start init again
+done:
+    irq set 0           ; set IRQ0 to tell the main program that we are synced
+    jmp done            ; infinite loop for now.  TODO: regular data shifting
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void keyboard_program_init(PIO pio, uint sm, uint offset, uint base_pin){
+    // base_pin is KCLK, base_pin+1 is KDAT
+    pio_sm_config c = keyboard_program_get_default_config(offset);
+
+    // set the out pins group to both pins as provided
+    sm_config_set_set_pins(&c, base_pin, 2); 
+
+    // set the jump pin to be KDAT
+    sm_config_set_jmp_pin(&c, base_pin+1);
+
+    // connect pins to selected PIO
+    pio_gpio_init(pio, base_pin);
+    pio_gpio_init(pio, base_pin+1);
+
+    // pins begin as output
+    pio_sm_set_consecutive_pindirs(pio, sm, base_pin, 2, true);
+
+    // enable pullup for when KDAT is made an input
+    gpio_pull_up(base_pin+1);
+
+    // set pins high to begin with
+    pio_sm_set_pins(pio, sm, 3);
+    
+    // set clkdiv for approx 400kHz
+    float div = clock_get_hz(clk_sys) / 400000;
+    sm_config_set_clkdiv(&c, div);
+    
+    // load our config into the selected state machine
+    pio_sm_init(pio, sm, offset, &c);
+
+    // start the state machine
+    pio_sm_set_enabled(pio, sm, true);    
+
+    // load Tx FIFO with 28500 (timeout value for 143ms at 400kHz clk with 2 instructions per loop)
+    pio_sm_put(pio, sm, 28500);
+}
+%}

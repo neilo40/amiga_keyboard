@@ -20,8 +20,8 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT} src/main.c )
 
-pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/src/kclk.pio)
-pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/src/kdat.pio)
+pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/src/keyboard.pio)
+pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/src/amiga.pio)
 
 pico_set_program_name(${PROJECT} ${PROJECT})
 pico_set_program_version(${PROJECT} "0.1")

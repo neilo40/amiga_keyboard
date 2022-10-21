@@ -4,48 +4,18 @@
 #include "main.h"
 #include <stdlib.h>
 #include "hardware/pio.h"
-#include "kclk.pio.h" // assembled from kclk.pio
-#include "kdat.pio.h" // assembled from kdat.pio
+#include "keyboard.pio.h" // assembled from keyboard.pio
+#include "amiga.pio.h" // assembles from amiga.pio
 
 extern void hid_task(void);
 static inline void process_keyboard_report(hid_keyboard_report_t const *p_report);
 
-const uint LED_PIN = 25;
 const uint KDAT_PIN = 16;
 const uint KCLK_PIN = 14;
 const uint KCLK_PIO_PIN = 10;
 const uint KDAT_PIO_PIN = 11;
-
-void send_sync_pulse() {
-    gpio_set_dir(KDAT_PIN, GPIO_OUT);
-    gpio_put(KDAT_PIN, false);
-    busy_wait_us(20);
-    gpio_put(KCLK_PIN, false);
-    busy_wait_us(20);
-    gpio_put(KCLK_PIN, true);
-    busy_wait_us(20);
-    gpio_put(KDAT_PIN, true);
-}
-
-int wait_for_ack(long timeout) {
-	// Set the KEY_DATA pin to input so we can listen for ack
-	gpio_set_dir(KDAT_PIN, GPIO_IN);
-
-	// wait for pin to go low, then high again
-    for (long i=0; i<timeout; i++){
-      if (!gpio_get(KDAT_PIN)){
-        for (long j=0; j<timeout; j++){
-          if (gpio_get(KDAT_PIN)){
-            return 1;
-          }
-          busy_wait_us(1);
-        }
-        return -1;
-      }
-      busy_wait_us(1);
-    }
-    return -1;
-}
+const uint AMIGA_KCLK_PIO_PIN = 12;
+const uint AMIGA_KDAT_PIO_PIN = 13;
 
 void send_byte(unsigned char b) {
     gpio_set_dir(KDAT_PIN, GPIO_OUT);
@@ -67,62 +37,44 @@ void send_byte(unsigned char b) {
     }
 }
 
-void init_sequence(){
-    while (true) {
-        // pulse a '1' on the data line
-        send_sync_pulse();
+uint keyboard_sm;
+uint amiga_sm;
+uint state;  // 0 = before sync, 1 = sync phase 1, 2 = regular data ack 
 
-        // wait for ack within ~134 ms
-        // then send init codes
-        if (wait_for_ack(22000) > 0) {
-            send_byte(0xFD); // Initiate power up key stream
-            if (wait_for_ack(1000) > 0) {
-                send_byte(0xFE); // terminate key stream
-                if (wait_for_ack(1000) > 0) {
-                    return;
-                }
-            }
-        }
+// ISR for IRQ 0 - ack received
+void ack_received(){
+    switch (state) {
+    case 0: 
+        pio_sm_put(pio0, keyboard_sm, 0xFD);  // TODO: this needs to be rotated
+        state = 1;
+    case 1: 
+        pio_sm_put(pio0, keyboard_sm, 0xFD); // TODO: this needs to be rotated
+        state = 2;
+    case 2:
+        pio_sm_put(pio0, keyboard_sm, 0xFD); // TODO: where to store queue of data bytes to send?
     }
 }
 
-uint kclk_sm;
-uint kdat_sm;
-PIO pio;
-
 int main(){
-    // PIO test
-    pio = pio0;
-    uint kclk_offset = pio_add_program(pio, &kclk_program);
-    kclk_sm = pio_claim_unused_sm(pio, true);
-    kclk_program_init(pio, kclk_sm, kclk_offset, KCLK_PIO_PIN);
-    
-    uint kdat_offset = pio_add_program(pio, &kdat_program);
-    kdat_sm = pio_claim_unused_sm(pio, true);
-    kdat_program_init(pio, kdat_sm, kdat_offset, KDAT_PIO_PIN);
-    
+    state = 0;
 
-    gpio_init(KDAT_PIN);
-    gpio_init(KCLK_PIN);
-    gpio_init(LED_PIN);
+    // IRQ 7 is PIO IRQ 0
+    irq_set_exclusive_handler(7, ack_received);
 
-    gpio_set_dir(KDAT_PIN, GPIO_OUT);
-    gpio_set_dir(KCLK_PIN, GPIO_OUT);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
-
-    gpio_put(KDAT_PIN, true);
-    gpio_put(KCLK_PIN, true);
+    uint keyboard_offset = pio_add_program(pio0, &keyboard_program);
+    keyboard_sm = pio_claim_unused_sm(pio0, true);
+    keyboard_program_init(pio0, keyboard_sm, keyboard_offset, KCLK_PIO_PIN);
+        
+    // simulate an amiga - connect pins 10-12 and 11-13
+    uint amiga_offset = pio_add_program(pio1, &amiga_program);
+    amiga_sm = pio_claim_unused_sm(pio1, true);
+    amiga_program_init(pio1, amiga_sm, amiga_offset, AMIGA_KCLK_PIO_PIN);
 
     board_init();
     tusb_init();
-    //init_sequence();  // loop here until computer responds to the init sequence
 
     while(1) {
-        // tuh_task();
-        busy_wait_us(50000);
-        gpio_put(LED_PIN, true);
-        busy_wait_us(50000);
-        gpio_put(LED_PIN, false);
+        tuh_task();
     }
 }
 
@@ -154,12 +106,12 @@ void check_for_reset(hid_keyboard_report_t const *report) {
         // A2000: hold KCLK low for 500ms and run init_sequence
 
         // Using PIO
-        pio_sm_set_enabled(pio, kclk_sm, false); // disable clock SM
-        pio_sm_set_pins(pio, kclk_sm, 0); // force KCLK low
+        pio_sm_set_enabled(pio0, keyboard_sm, false); // disable keyboard SM
+        pio_sm_set_pins(pio0, keyboard_sm, 2); // force KCLK low, keep KDAT high
         busy_wait_us(500000); // wait 500ms
-        pio_sm_set_enabled(pio, kclk_sm, true); // start clock running again
-        
-        pio_sm_restart(pio, kdat_sm); // restart kdat state machine
+        state = 0;
+        pio_sm_set_enabled(pio0, keyboard_sm, true); // re-enable SM
+        pio_sm_restart(pio0, keyboard_sm); // restart state machine
     }
 }
 
