@@ -36,3 +36,7 @@ target_include_directories(${PROJECT} BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR} in
 target_link_libraries(${PROJECT} PUBLIC pico_stdlib hardware_pio tinyusb_host tinyusb_board)
 
 pico_add_extra_outputs(${PROJECT})
+
+add_custom_command(TARGET ${PROJECT} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy amiga_keyboard.uf2 /mnt/c/Users/Neil/Downloads
+)
